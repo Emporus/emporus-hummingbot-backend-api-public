@@ -69,8 +69,8 @@ async def emporus_trades(start_time: int = None, end_time: int = None):
     return emporus_manager.get_trades(start_time, end_time)
 
 
-@router.get("/get-data-collector-config/{container_name}", response_model=dict)
-async def get_config(container_name: str):
+@router.get("/get-instance-config/{container_name}", response_model=dict)
+async def get_instance_config(container_name: str):
     # Form the instance directory path correctly
     instance_dir = os.path.join('bots', 'instances', container_name)
 
@@ -91,7 +91,7 @@ async def get_config(container_name: str):
     if not controllers_config:
         return {"error": "controllers_config not found in script config"}
 
-    # reading all the data collector configs from the controllers_config (conf/controllers/[controller_name].yml)
+    # reading all the configs from the controllers_config (conf/controllers/[controller_name].yml)
     controller_configs = []
     for controller_name in controllers_config:
         controller_config_path = os.path.join(instance_dir, 'conf', 'controllers', f"{controller_name}")
@@ -99,5 +99,5 @@ async def get_config(container_name: str):
             data = yaml.safe_load(controller_config)
             controller_configs.append(data)
 
-    # return the script config and data collector configs
+    # return the script config and controller configs
     return {"script_config": script_config, "controller_configs": controller_configs}
