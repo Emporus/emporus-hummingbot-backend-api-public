@@ -1,3 +1,4 @@
+import json
 import logging
 import math
 import os
@@ -6,8 +7,7 @@ from typing import Any, Dict, List, Mapping
 import pandas as pd
 import yaml
 from fastapi import APIRouter
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
 
 router = APIRouter(tags=["Emporus Management"])
 
@@ -18,11 +18,15 @@ class EmporusSQLiteDatabase:
         self.db_path = db_path
         self.db_path = f'sqlite:///{os.path.join(db_path)}'
         self.engine = create_engine(self.db_path, connect_args={'check_same_thread': False})
-        self.session_maker = sessionmaker(bind=self.engine)
 
     def get_trades(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
-        with self.session_maker() as session:
-            trades_list = pd.read_sql_query(text(query), session.connection(), params=params).to_dict('records')
+        with self.engine.connect() as connection:
+            trades_list = pd.read_sql_query(query, connection.connection, params=params).to_dict('records')
+        # Convert stringified JSON fields to JSON
+        for trade in trades_list:
+            for key in ["entry_details", "exit_details", "raw_model_output"]:
+                if key in trade and isinstance(trade[key], str):
+                    trade[key] = json.loads(trade[key])
         return trades_list
 
 
@@ -53,6 +57,17 @@ class EmporusPostgresDatabase:
 class EmporusTradeManager:
     def __init__(self):
         self.postgres_db = EmporusPostgresDatabase()
+        self.sqlite_dbs: Dict[str, EmporusSQLiteDatabase] = {}
+
+    def get_trades_from_sqlite(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
+        for db_path in self.get_local_databases():
+            if db_path not in self.sqlite_dbs:
+                self.sqlite_dbs[db_path] = EmporusSQLiteDatabase(db_path)
+
+        trades_list = []
+        for db in self.sqlite_dbs.values():
+            trades_list += db.get_trades(query, params)
+        return trades_list
 
     def get_trades(self, start_time: int = None, end_time: int = None) -> Dict[str, Any]:
         request_query = "SELECT * FROM \"EmporusTrades\" WHERE 1=1"
@@ -67,7 +82,8 @@ class EmporusTradeManager:
             query_params.append(end_time)
 
         try:
-            trades_list = self.postgres_db.get_trades(request_query, query_params)
+            trades_sql = self.get_trades_from_sqlite(request_query, query_params)
+            trades_pgs = self.postgres_db.get_trades(request_query, query_params)
         except Exception as e:
             logging.error(f"Error retrieving trades: {str(e)}")
             return {"error": str(e)}
@@ -80,6 +96,7 @@ class EmporusTradeManager:
                     trade[key] = None  # Replace None with a safe default (can be None if needed)
             return trade
 
+        trades_list = trades_sql + trades_pgs
         safe_trades_list = [clean_trade(trade) for trade in trades_list]
         return {"data": safe_trades_list}
 
