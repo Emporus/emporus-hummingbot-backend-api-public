@@ -1,17 +1,32 @@
 import logging
 import math
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List, Mapping
 
 import pandas as pd
 import yaml
 from fastapi import APIRouter
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
 router = APIRouter(tags=["Emporus Management"])
 
 
-class EmporusTradeManager:
+class EmporusSQLiteDatabase:
+    def __init__(self, db_path: str):
+        self.db_name = os.path.basename(db_path)
+        self.db_path = db_path
+        self.db_path = f'sqlite:///{os.path.join(db_path)}'
+        self.engine = create_engine(self.db_path, connect_args={'check_same_thread': False})
+        self.session_maker = sessionmaker(bind=self.engine)
+
+    def get_trades(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
+        with self.session_maker() as session:
+            trades_list = pd.read_sql_query(text(query), session.connection(), params=params).to_dict('records')
+        return trades_list
+
+
+class EmporusPostgresDatabase:
     def __init__(self):
         username = os.getenv("POSTGRES_USERNAME", "postgres")
         password = os.getenv("POSTGRES_PASSWORD", "postgres")
@@ -29,39 +44,72 @@ class EmporusTradeManager:
             connect_args={"connect_timeout": 10}
         )
 
+    def get_trades(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
+        with self.engine.connect() as connection:
+            trades_list = pd.read_sql_query(query, connection.connection, params=params).to_dict('records')
+        return trades_list
+
+
+class EmporusTradeManager:
+    def __init__(self):
+        self.postgres_db = EmporusPostgresDatabase()
+
     def get_trades(self, start_time: int = None, end_time: int = None) -> Dict[str, Any]:
+        request_query = "SELECT * FROM \"EmporusTrades\" WHERE 1=1"
+        query_params = []
+
+        if start_time:
+            request_query += " AND \"update_timestamp\" > %s"
+            query_params.append(start_time)
+
+        if end_time:
+            request_query += " AND \"update_timestamp\" < %s"
+            query_params.append(end_time)
+
         try:
-            request_query = "SELECT * FROM \"EmporusTrades\" WHERE 1=1"
-            query_params = []
-
-            if start_time:
-                request_query += " AND \"update_timestamp\" > %s"
-                query_params.append(start_time)
-
-            if end_time:
-                request_query += " AND \"update_timestamp\" < %s"
-                query_params.append(end_time)
-
-            with self.engine.connect() as connection:
-                trades_list = pd.read_sql_query(request_query, connection.connection, params=query_params).to_dict('records')
-
-                def clean_trade(trade):
-                    for key, value in trade.items():
-                        if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
-                            trade[key] = None
-                        elif value is None:
-                            trade[key] = None  # Replace None with a safe default (can be None if needed)
-                    return trade
-
-                safe_trades_list = [clean_trade(trade) for trade in trades_list]
-                return {"data": safe_trades_list}
+            trades_list = self.postgres_db.get_trades(request_query, query_params)
         except Exception as e:
             logging.error(f"Error retrieving trades: {str(e)}")
             return {"error": str(e)}
 
+        def clean_trade(trade):
+            for key, value in trade.items():
+                if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+                    trade[key] = None
+                elif value is None:
+                    trade[key] = None  # Replace None with a safe default (can be None if needed)
+            return trade
+
+        safe_trades_list = [clean_trade(trade) for trade in trades_list]
+        return {"data": safe_trades_list}
+
+    def list_folders(self, base_path: str, directory: str) -> List[str]:
+        dir_path = os.path.join(base_path, directory)
+        return [d for d in os.listdir(dir_path) if os.path.isdir(os.path.join(dir_path, d))]
+
+    def get_local_databases(self):
+        base_path = "bots"
+        active_bots_path = os.path.join(base_path, "instances")
+        active_bots_instances = self.list_folders(base_path, "instances")
+        active_bots_databases = []
+        for active_bots_instance in active_bots_instances:
+            db_path = os.path.join(active_bots_path, active_bots_instance, "data")
+            active_bots_databases += [os.path.join(db_path, db_file) for db_file in
+                                      os.listdir(db_path)
+                                      if db_file.endswith(".sqlite")]
+        return active_bots_databases
+
 
 # Instantiate the manager
 emporus_manager = EmporusTradeManager()
+
+
+@router.get("/emporus-databases", response_model=List[str])
+async def emporus_databases():
+    active_databases = emporus_manager.get_local_databases()
+    if not active_databases:
+        return {"error": "No databases found"}
+    return active_databases
 
 
 @router.get("/emporus-trades", response_model=Dict[str, Any])
