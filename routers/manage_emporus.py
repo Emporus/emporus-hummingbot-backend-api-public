@@ -12,6 +12,9 @@ from sqlalchemy.dialects.postgresql import insert
 
 router = APIRouter(tags=["Emporus Management"])
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 
 class EmporusSQLiteDatabase:
     def __init__(self, db_path: str):
@@ -22,9 +25,8 @@ class EmporusSQLiteDatabase:
 
     def get_trades(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
         with self.engine.connect() as connection:
-            print(f"Query: {query}, Params: {params}")
             trades_list = pd.read_sql_query(query, connection.connection, params=params).to_dict('records')
-            print(f"Fetched {len(trades_list)} trades from {self.db_path}")
+            logger.info(f"Fetched {len(trades_list)} trades from {self.db_path}")
         # Convert stringified JSON fields to JSON
         for trade in trades_list:
             for key in ["entry_details", "exit_details", "raw_model_output"]:
@@ -54,12 +56,14 @@ class EmporusPostgresDatabase:
     def get_trades(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
         with self.engine.connect() as connection:
             trades_list = pd.read_sql_query(query, connection.connection, params=params).to_dict('records')
+            logger.info(f"Fetched {len(trades_list)} trades from Postgres")
         return trades_list
 
     def save_trades(self, trades_list: List[Dict[str, Any]]):
         if not trades_list:
             return
 
+        logger.info(f"Saving {len(trades_list)} trades to Postgres")
         df = pd.DataFrame(trades_list)
 
         # Convert stringified JSON fields to JSON
@@ -88,6 +92,7 @@ class EmporusTradeManager:
     def __init__(self):
         self.postgres_db = EmporusPostgresDatabase()
         self.sqlite_dbs: Dict[str, EmporusSQLiteDatabase] = {}
+        logger.info("EmporusTradeManager initialized")
 
     def get_trades_from_sqlite(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
         query = query.replace("%s", "?")
@@ -99,6 +104,14 @@ class EmporusTradeManager:
         for db in self.sqlite_dbs.values():
             trades_list += db.get_trades(query, params)
         return trades_list
+
+    def clean_trade(self, trade):
+        for key, value in trade.items():
+            if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+                trade[key] = None
+            elif value is None:
+                trade[key] = None  # Replace None with a safe default (can be None if needed)
+        return trade
 
     def get_trades(self, start_time: int = None, end_time: int = None) -> Dict[str, Any]:
         request_query = "SELECT * FROM \"EmporusTrades\" WHERE 1=1"
@@ -113,27 +126,34 @@ class EmporusTradeManager:
             query_params.append(end_time)
 
         try:
+            trades_pgs = self.postgres_db.get_trades(request_query, query_params)
             trades_sql = self.get_trades_from_sqlite(request_query, query_params)
-            # trades_pgs = self.postgres_db.get_trades(request_query, query_params)
         except Exception as e:
             logging.error(f"Error retrieving trades: {str(e)}")
             return {"error": str(e)}
 
-        def clean_trade(trade):
-            for key, value in trade.items():
-                if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
-                    trade[key] = None
-                elif value is None:
-                    trade[key] = None  # Replace None with a safe default (can be None if needed)
-            return trade
-
-        trades_list = trades_sql  # + trades_pgs
-        if not trades_list:
+        if not trades_sql and not trades_pgs:
             return {"data": []}
 
-        safe_trades_list = [clean_trade(trade) for trade in trades_list]
-        self.postgres_db.save_trades(safe_trades_list)
-        return {"data": safe_trades_list}
+        duplicated_ids = [t['id'] for t in trades_sql if t['id'] in [t['id'] for t in trades_pgs]]
+        logger.info(f"Retrieved {len(trades_pgs)} trades from Postgres and {len(trades_sql)} trades"
+                    f" from SQLite ({len(duplicated_ids)} duplicates)")
+
+        # Convert trades to a safe format for JSON serialization
+        trades_pgs = [self.clean_trade(trade) for trade in trades_pgs]
+        trades_sql = [self.clean_trade(trade) for trade in trades_sql if trade['id'] not in duplicated_ids]
+
+        # Save new trades to Postgres
+        self.postgres_db.save_trades(trades_sql)
+
+        # Return the combined list of trades
+        return {"data": trades_pgs + trades_sql}
+
+    def sqlite_to_postgres(self, db_path: str):
+        db = self.sqlite_dbs.get(db_path, EmporusSQLiteDatabase(db_path))
+        trades_list = db.get_trades("SELECT * FROM \"EmporusTrades\"")
+        logging.info(f"Saving {len(trades_list)} trades from {db_path} to Postgres")
+        self.postgres_db.save_trades(trades_list)
 
     def list_folders(self, base_path: str, directory: str) -> List[str]:
         dir_path = os.path.join(base_path, directory)
