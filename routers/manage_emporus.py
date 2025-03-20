@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Mapping
 import pandas as pd
 import yaml
 from fastapi import APIRouter
-from sqlalchemy import create_engine
-from sqlalchemy.types import JSON
+from sqlalchemy import MetaData, Table, create_engine
+from sqlalchemy.dialects.postgresql import insert
 
 router = APIRouter(tags=["Emporus Management"])
 
@@ -70,14 +70,15 @@ class EmporusPostgresDatabase:
 
         # Replace NaN with None
         df = df.where(pd.notnull(df), None)
-
         try:
+            metadata = MetaData()
+            trades_table = Table("EmporusTrades", metadata, autoload_with=self.engine)
+
             with self.engine.begin() as conn:
-                df.to_sql("EmporusTrades", con=conn, if_exists="append", index=False, dtype={
-                    "entry_details": JSON,
-                    "exit_details": JSON,
-                    "raw_model_output": JSON
-                })
+                stmt = insert(trades_table).values(
+                    df.to_dict(orient="records")).on_conflict_do_nothing()
+                conn.execute(stmt)
+
             return
         except Exception as e:
             logging.error(f"Error saving trades: {str(e)}")
