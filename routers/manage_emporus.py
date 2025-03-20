@@ -8,6 +8,7 @@ import pandas as pd
 import yaml
 from fastapi import APIRouter
 from sqlalchemy import create_engine
+from sqlalchemy.types import JSON
 
 router = APIRouter(tags=["Emporus Management"])
 
@@ -21,7 +22,9 @@ class EmporusSQLiteDatabase:
 
     def get_trades(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
         with self.engine.connect() as connection:
+            print(f"Query: {query}, Params: {params}")
             trades_list = pd.read_sql_query(query, connection.connection, params=params).to_dict('records')
+            print(f"Fetched {len(trades_list)} trades from {self.db_path}")
         # Convert stringified JSON fields to JSON
         for trade in trades_list:
             for key in ["entry_details", "exit_details", "raw_model_output"]:
@@ -37,7 +40,7 @@ class EmporusPostgresDatabase:
         host = os.getenv("POSTGRES_HOST", "localhost")
         port = int(os.getenv("POSTGRES_PORT", 5432))
         database = os.getenv("POSTGRES_DATABASE", "hummingbot")
-        db_connection_string = f"postgresql://{username}:{password}@{host}:{port}/{database}"
+        db_connection_string = f"postgresql+psycopg2://{username}:{password}@{host}:{port}/{database}"
 
         self.engine = create_engine(
             db_connection_string,
@@ -53,6 +56,32 @@ class EmporusPostgresDatabase:
             trades_list = pd.read_sql_query(query, connection.connection, params=params).to_dict('records')
         return trades_list
 
+    def save_trades(self, trades_list: List[Dict[str, Any]]):
+        if not trades_list:
+            return
+
+        df = pd.DataFrame(trades_list)
+
+        # Convert stringified JSON fields to JSON
+        for field in ["entry_details", "exit_details", "raw_model_output"]:
+            if field in df.columns:
+                df[field] = df[field].apply(
+                    lambda x: x if isinstance(x, (dict, list)) else json.loads(x) if isinstance(x, str) else None)
+
+        # Replace NaN with None
+        df = df.where(pd.notnull(df), None)
+
+        try:
+            with self.engine.begin() as conn:
+                df.to_sql("EmporusTrades", con=conn, if_exists="append", index=False, dtype={
+                    "entry_details": JSON,
+                    "exit_details": JSON,
+                    "raw_model_output": JSON
+                })
+            return
+        except Exception as e:
+            logging.error(f"Error saving trades: {str(e)}")
+
 
 class EmporusTradeManager:
     def __init__(self):
@@ -60,6 +89,7 @@ class EmporusTradeManager:
         self.sqlite_dbs: Dict[str, EmporusSQLiteDatabase] = {}
 
     def get_trades_from_sqlite(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
+        query = query.replace("%s", "?")
         for db_path in self.get_local_databases():
             if db_path not in self.sqlite_dbs:
                 self.sqlite_dbs[db_path] = EmporusSQLiteDatabase(db_path)
@@ -83,7 +113,7 @@ class EmporusTradeManager:
 
         try:
             trades_sql = self.get_trades_from_sqlite(request_query, query_params)
-            trades_pgs = self.postgres_db.get_trades(request_query, query_params)
+            # trades_pgs = self.postgres_db.get_trades(request_query, query_params)
         except Exception as e:
             logging.error(f"Error retrieving trades: {str(e)}")
             return {"error": str(e)}
@@ -96,8 +126,12 @@ class EmporusTradeManager:
                     trade[key] = None  # Replace None with a safe default (can be None if needed)
             return trade
 
-        trades_list = trades_sql + trades_pgs
+        trades_list = trades_sql  # + trades_pgs
+        if not trades_list:
+            return {"data": []}
+
         safe_trades_list = [clean_trade(trade) for trade in trades_list]
+        self.postgres_db.save_trades(safe_trades_list)
         return {"data": safe_trades_list}
 
     def list_folders(self, base_path: str, directory: str) -> List[str]:
@@ -113,7 +147,8 @@ class EmporusTradeManager:
             db_path = os.path.join(active_bots_path, active_bots_instance, "data")
             active_bots_databases += [os.path.join(db_path, db_file) for db_file in
                                       os.listdir(db_path)
-                                      if db_file.endswith(".sqlite")]
+                                      if db_file.endswith(".sqlite") and
+                                      db_file.startswith("trade-controller-")]
         return active_bots_databases
 
 

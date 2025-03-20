@@ -6,7 +6,7 @@ dependencies:
   - python=3.10
   - fastapi
   - uvicorn
-  - sqlalchemy=1.4
+  - sqlalchemy=2.0.39
   - libcxx
   - pip
   - pip:
