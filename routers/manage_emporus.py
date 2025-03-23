@@ -85,7 +85,7 @@ class EmporusPostgresDatabase:
 
             return
         except Exception as e:
-            logging.error(f"Error saving trades: {str(e)}")
+            logger.error(f"Error saving trades: {str(e)}")
 
 
 class EmporusTradeManager:
@@ -129,7 +129,7 @@ class EmporusTradeManager:
             trades_pgs = self.postgres_db.get_trades(request_query, query_params)
             trades_sql = self.get_trades_from_sqlite(request_query, query_params)
         except Exception as e:
-            logging.error(f"Error retrieving trades: {str(e)}")
+            logger.error(f"Error retrieving trades: {str(e)}")
             return {"error": str(e)}
 
         if not trades_sql and not trades_pgs:
@@ -149,11 +149,23 @@ class EmporusTradeManager:
         # Return the combined list of trades
         return {"data": trades_pgs + trades_sql}
 
-    def sqlite_to_postgres(self, db_path: str):
+    def sqlite_to_postgres(self, instance_name: str):
+        db_path = self.get_instance_db_path(instance_name)
+        logger.info(f"Fetching trades from {db_path}")
         db = self.sqlite_dbs.get(db_path, EmporusSQLiteDatabase(db_path))
         trades_list = db.get_trades("SELECT * FROM \"EmporusTrades\"")
-        logging.info(f"Saving {len(trades_list)} trades from {db_path} to Postgres")
         self.postgres_db.save_trades(trades_list)
+
+    def get_instance_db_path(self, instance_name: str) -> str:
+        base_path = "bots"
+        active_bots_path = os.path.join(base_path, "instances")
+        # look for the .sqlite file in the data directory of the instance
+        db_path = os.path.join(active_bots_path, instance_name, "data")
+        db_files = [db_file for db_file in os.listdir(db_path) if db_file.endswith(".sqlite") and
+                    db_file.startswith("trade-controller-")]
+        if not db_files:
+            raise Exception(f"No .sqlite file found in {db_path}")
+        return os.path.join(db_path, db_files[0])
 
     def list_folders(self, base_path: str, directory: str) -> List[str]:
         dir_path = os.path.join(base_path, directory)
@@ -177,12 +189,13 @@ class EmporusTradeManager:
 emporus_manager = EmporusTradeManager()
 
 
-@router.get("/emporus-databases", response_model=List[str])
-async def emporus_databases():
-    active_databases = emporus_manager.get_local_databases()
-    if not active_databases:
-        return {"error": "No databases found"}
-    return active_databases
+@router.post("/emporus-save-trades/{container_name}")
+async def emporus_save_trades(container_name: str):
+    try:
+        emporus_manager.sqlite_to_postgres(container_name)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @router.get("/emporus-trades", response_model=Dict[str, Any])
