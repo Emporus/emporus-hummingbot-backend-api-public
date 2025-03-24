@@ -167,11 +167,20 @@ class EmporusTradeManager:
         return {"data": trades_pgs + trades_sql}
 
     def sqlite_to_postgres(self, instance_name: str):
+        # Get the SQLite database path
         db_path = self.get_instance_db_path(instance_name)
+
         logger.info(f"Fetching trades from {db_path}")
         db = self.sqlite_dbs.get(db_path, EmporusSQLiteDatabase(db_path))
         trades_list = db.get_trades("SELECT * FROM \"EmporusTrades\"")
+
+        # Save trades to Postgres
         self.postgres_db.save_trades(trades_list)
+
+        # Dispose the SQLite database
+        db.dispose()
+        if db_path in self.sqlite_dbs:
+            del self.sqlite_dbs[db_path]
 
     def get_instance_db_path(self, instance_name: str) -> str:
         base_path = "bots"
