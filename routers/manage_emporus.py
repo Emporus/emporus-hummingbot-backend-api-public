@@ -34,6 +34,11 @@ class EmporusSQLiteDatabase:
                     trade[key] = json.loads(trade[key])
         return trades_list
 
+    def dispose(self):
+        if self.engine:
+            self.engine.dispose()
+            self.engine = None
+
 
 class EmporusPostgresDatabase:
     def __init__(self):
@@ -95,12 +100,24 @@ class EmporusTradeManager:
         logger.info("EmporusTradeManager initialized")
 
     def get_trades_from_sqlite(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
-        query = query.replace("%s", "?")
+        logger.info("Available SQLite DBs:")
+        for path in self.sqlite_dbs:
+            logger.info(f" * {path} ({'exists' if os.path.exists(path) else 'removed'})")
+
         for db_path in self.get_local_databases():
             if db_path not in self.sqlite_dbs:
+                logger.info(f"Adding SQLite DB: {db_path}")
                 self.sqlite_dbs[db_path] = EmporusSQLiteDatabase(db_path)
 
+        # Remove archived DBs
+        invalid_paths = [path for path in self.sqlite_dbs if not os.path.exists(path)]
+        for path in invalid_paths:
+            logger.info(f"Removing archived SQLite DB: {path}")
+            self.sqlite_dbs[path].dispose()
+            del self.sqlite_dbs[path]
+
         trades_list = []
+        query = query.replace("%s", "?")
         for db in self.sqlite_dbs.values():
             trades_list += db.get_trades(query, params)
         return trades_list
