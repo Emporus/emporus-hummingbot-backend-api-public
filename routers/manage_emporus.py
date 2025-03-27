@@ -130,7 +130,7 @@ class EmporusTradeManager:
                 trade[key] = None  # Replace None with a safe default (can be None if needed)
         return trade
 
-    def get_trades(self, start_time: int = None, end_time: int = None) -> Dict[str, Any]:
+    def emporus_sync_and_fetch_trades(self, start_time: int = None, end_time: int = None) -> Dict[str, Any]:
         request_query = "SELECT * FROM \"EmporusTrades\" WHERE 1=1"
         query_params = []
 
@@ -177,7 +177,7 @@ class EmporusTradeManager:
         # Save trades to Postgres
         self.postgres_db.save_trades(trades_list)
 
-        # Dispose the SQLite database
+        logger.info(f"Disposing SQLite DB: {db_path}")
         db.dispose()
         if db_path in self.sqlite_dbs:
             del self.sqlite_dbs[db_path]
@@ -224,9 +224,9 @@ async def emporus_save_trades(container_name: str):
         return {"success": False, "error": str(e)}
 
 
-@router.get("/emporus-trades", response_model=Dict[str, Any])
-async def emporus_trades(start_time: int = None, end_time: int = None):
-    return emporus_manager.get_trades(start_time, end_time)
+@router.post("/emporus-sync-and-fetch-trades", response_model=Dict[str, Any])
+async def emporus_sync_and_fetch_trades(start_time: int = None, end_time: int = None):
+    return emporus_manager.emporus_sync_and_fetch_trades(start_time, end_time)
 
 
 @router.get("/get-instance-config/{container_name}", response_model=dict)
