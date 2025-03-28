@@ -54,51 +54,21 @@ jobs:
             ${{ env.EMPORUS_IMAGE_BASE }}:staging-v2-tokyo
             ${{ env.EMPORUS_IMAGE }}
 
-      - name: Send error to Space
-        if: failure()
-        run: |
-          curl -X POST 'https://${{ secrets.SPACE_DOMAIN_NEW }}/api/http/chats/messages/send-message?$fields=details' \
-            -H 'Authorization: Bearer ${{ secrets.SPACE_TOKEN_NEW }}' \
-            -H 'Accept: application/json' \
-            -H 'Content-Type: application/json' \
-            -d '{
-              "channel": "channel:name:${{ env.SPACE_CHANNEL_NAME }}",
-              "content": {
-                "className": "ChatMessage.Block",
-                "style": "ERROR",
-                "outline": {
-                  "className": "MessageOutline",
-                  "icon": {
-                    "icon": "issue"
-                  },
-                  "text": "CI-CD BUILD ERROR -  ${{ env.PACKAGE_NAME }}-backup"
-                },
-                "sections": [
-                  {
-                    "className": "MessageSection",
-                    "elements": [],
-                    "header": "-------------------------------- \n- Environment : staging-v2-tokyo-backup.\n- Image name : ${{ env.PACKAGE_NAME }}.",
-                    "style": "ERROR",
-                    "textSize": "SMALL"
-                  },
-                  {
-                    "className": "MessageSection",
-                    "elements": [],
-                    "header": "- Error message : Docker image build failed ",
-                    "style": "ERROR",
-                    "textSize": "SMALL"
-                  },
-                  {
-                    "className": "MessageSection",
-                    "elements": [],
-                    "header": "- Build details: \n View build logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}  \n-------------------------------- ",
-                    "style": "ERROR",
-                    "textSize": "SMALL"
-                  }
-                ]
-              }
-            }'
-  deploy_to_server:
+  send-error-to-slack-channel: # ----------------------------------------------------------------------------------------------------------------------
+    name: Send notification to slack channel
+    needs: publish_image
+    if: failure()
+    uses: Emporus/emporus-reusable-workflows/.github/workflows/send-slack-errors-build.yaml@main
+    with:
+      ENV_NAME: staging-v2-tokyo      # The same values for cluster name and environment.
+      PACKAGE_NAME: ${{ github.event.repository.name }}
+      GITHUB_SERVER_URL: ${{ github.server_url}}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+    secrets:
+      SLACK_TOKEN: ${{ secrets.SLACK_TOKEN_NOTIFICATION_BOT }}  # --------------------------------------------------------------------------------------
+
+  deploy:
     name: Deploy to server and pull images
     runs-on: ubuntu-20.04
     needs: publish_image
@@ -148,57 +118,17 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING_V2 }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING_V2 }}
 
-      - name: Send error to Space
-        if: failure()
-        run: |
-          curl -X POST 'https://${{ secrets.SPACE_DOMAIN_NEW }}/api/http/chats/messages/send-message?$fields=details' \
-            -H 'Authorization: Bearer ${{ secrets.SPACE_TOKEN_NEW }}' \
-            -H 'Accept: application/json' \
-            -H 'Content-Type: application/json' \
-            -d '{
-              "channel": "channel:name:${{ env.SPACE_CHANNEL_NAME }}",
-              "content": {
-                "className": "ChatMessage.Block",
-                "style": "ERROR",
-                "outline": {
-                  "className": "MessageOutline",
-                  "icon": {
-                    "icon": "issue"
-                  },
-                  "text": "CI-CD DEPLOYMENT ERROR -  ${{ env.PACKAGE_NAME }}"
-                },
-                "sections": [
-                  {
-                    "className": "MessageSection",
-                    "elements": [],
-                    "header": "-------------------------------- \n- Environment : staging-v2-tokyo.\n- Service name : ${{ env.PACKAGE_NAME }}.",
-                    "style": "ERROR",
-                    "textSize": "SMALL"
-                  },
-                  {
-                    "className": "MessageSection",
-                    "elements": [],
-                    "header": "- EC2 instance name : ${{ env.INSTANCE_NAME }}.",
-                    "style": "ERROR",
-                    "textSize": "SMALL"
-                  },
-                  {
-                    "className": "MessageSection",
-                    "elements": [],
-                    "header": "- Error message : Deployment service failed.",
-                    "style": "WARNING",
-                    "textSize": "SMALL"
-                  },
-                  {
-                    "className": "MessageSection",
-                    "elements": [],
-                    "header": "- Deployment details: \n View deployment logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}  \n-------------------------------- ",
-                    "style": "ERROR",
-                    "textSize": "SMALL"
-                  }
-                ]
-              }
-            }'
-
-
+  send-error-to-slack-channel-deployment: # ----------------------------------------------------------------------------------------------------------------------
+    name: Send notification to slack channel 
+    needs: deploy
+    if: always() && needs.deploy.result == 'failure'
+    uses: Emporus/emporus-reusable-workflows/.github/workflows/send-slack-errors-deployment-server.yaml@main
+    with:
+      ENV_NAME: staging-v2-tokyo      # The same values for cluster name and environment.
+      PACKAGE_NAME: ${{ github.event.repository.name }}
+      GITHUB_SERVER_URL: ${{ github.server_url}}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+    secrets:
+      SLACK_TOKEN: ${{ secrets.SLACK_TOKEN_NOTIFICATION_BOT }}  # --------------------------------------------------------------------------------------
 
