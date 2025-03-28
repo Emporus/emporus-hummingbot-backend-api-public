@@ -58,7 +58,7 @@ jobs:
     name: Send notification to slack channel
     needs: publish_image
     if: failure()
-    uses: Emporus/emporus-reusable-workflows/.github/workflows/send-slack-errors-build.yaml@main
+    uses: Emporus/emporus-hummingbot-backend-api/.github/workflows/notification-slack-build.yaml@staging-v2-tokyo
     with:
       ENV_NAME: staging-v2-tokyo      # The same values for cluster name and environment.
       PACKAGE_NAME: ${{ github.event.repository.name }}
@@ -122,7 +122,7 @@ jobs:
     name: Send notification to slack channel 
     needs: deploy
     if: always() && needs.deploy.result == 'failure'
-    uses: Emporus/emporus-reusable-workflows/.github/workflows/send-slack-errors-deployment-server.yaml@main
+    uses: Emporus/emporus-hummingbot-backend-api/.github/workflows/notification-slack-deployment-server.yaml@staging-v2-tokyo
     with:
       ENV_NAME: staging-v2-tokyo      # The same values for cluster name and environment.
       PACKAGE_NAME: ${{ github.event.repository.name }}

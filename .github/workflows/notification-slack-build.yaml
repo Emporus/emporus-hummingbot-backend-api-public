@@ -1,0 +1,74 @@
+name: Send Slack Notification
+
+on:
+  workflow_call:
+    inputs:
+      PACKAGE_NAME:
+        required: true
+        type: string
+      GITHUB_RUN_ID:
+        required: true
+        type: string
+      GITHUB_REPOSITORY:
+        required: true
+        type: string
+      GITHUB_SERVER_URL:
+        required: true
+        type: string
+      ENV_NAME:
+        required: true
+        type: string
+    secrets:
+      SLACK_TOKEN:
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack Notification
+        run: |
+          curl -X POST "https://slack.com/api/chat.postMessage" \
+              -H "Authorization: Bearer ${{ secrets.SLACK_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                  "channel": "#staging-ci-cd-errors",
+                  "blocks": [
+                      {
+                          "type": "section",
+                          "text": {
+                              "type": "mrkdwn",
+                              "text": " Hello @here !"
+                          }
+                      },
+                      {
+                          "type": "header",
+                          "text": {
+                              "type": "plain_text",
+                              "text": "🚨 CI/CD BUILD ERROR - ${{ inputs.PACKAGE_NAME }}",
+                              "emoji": true
+                          }
+                      },
+                      {
+                          "type": "section",
+                          "text": {
+                              "type": "mrkdwn",
+                              "text": "* 🛠 Environment   :* `${{ inputs.ENV_NAME}}`\n* 📦 Image name    :* `${{ inputs.PACKAGE_NAME }}`"
+                          }
+                      },
+                      {
+                          "type": "section",
+                          "text": {
+                              "type": "mrkdwn",
+                              "text": "* ❌ Error message:* Docker image build failed check logs \n⬇️"
+                          }
+                      },
+                      {
+                          "type": "section",
+                          "text": {
+                              "type": "mrkdwn",
+                              "text": "*Build details:*\n🔗 View build logs: ${{ inputs.GITHUB_SERVER_URL }}/${{ inputs.GITHUB_REPOSITORY }}/actions/runs/${{ inputs.GITHUB_RUN_ID }}"
+                          }
+                      }
+                  ]
+              }'
