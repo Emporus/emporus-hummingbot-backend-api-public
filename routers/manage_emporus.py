@@ -90,7 +90,7 @@ class EmporusTradeManager:
             query_params.append(end_time)
 
         try:
-            trades_pgs = self.postgres_db.get_trades(request_query, query_params)
+            trades_pgs = self.postgres_db.get_trades_with_query(request_query, query_params)
             trades_sql = self.get_trades_from_sqlite(request_query, query_params)
         except Exception as e:
             logger.error(f"Error retrieving trades: {str(e)}")
