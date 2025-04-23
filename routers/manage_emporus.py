@@ -6,9 +6,9 @@ from typing import Any, Dict, List, Mapping
 
 import pandas as pd
 import yaml
+from emporus.cex.db.postgres import EmporusPostgresDatabase
 from fastapi import APIRouter
-from sqlalchemy import MetaData, Table, create_engine
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import create_engine
 
 router = APIRouter(tags=["Emporus Management"])
 
@@ -38,59 +38,6 @@ class EmporusSQLiteDatabase:
         if self.engine:
             self.engine.dispose()
             self.engine = None
-
-
-class EmporusPostgresDatabase:
-    def __init__(self):
-        username = os.getenv("POSTGRES_USERNAME", "postgres")
-        password = os.getenv("POSTGRES_PASSWORD", "postgres")
-        host = os.getenv("POSTGRES_HOST", "localhost")
-        port = int(os.getenv("POSTGRES_PORT", 5432))
-        database = os.getenv("POSTGRES_DATABASE", "hummingbot")
-        db_connection_string = f"postgresql+psycopg2://{username}:{password}@{host}:{port}/{database}"
-
-        self.engine = create_engine(
-            db_connection_string,
-            pool_size=5,
-            max_overflow=10,
-            pool_timeout=30,
-            pool_recycle=1800,
-            connect_args={"connect_timeout": 10}
-        )
-
-    def get_trades(self, query: str, params: list[Any] | Mapping[str, Any] | None = None) -> List[Dict[str, Any]]:
-        with self.engine.connect() as connection:
-            trades_list = pd.read_sql_query(query, connection.connection, params=params).to_dict('records')
-            logger.info(f"Fetched {len(trades_list)} trades from Postgres")
-        return trades_list
-
-    def save_trades(self, trades_list: List[Dict[str, Any]]):
-        if not trades_list:
-            return
-
-        logger.info(f"Saving {len(trades_list)} trades to Postgres")
-        df = pd.DataFrame(trades_list)
-
-        # Convert stringified JSON fields to JSON
-        for field in ["entry_details", "exit_details", "raw_model_output"]:
-            if field in df.columns:
-                df[field] = df[field].apply(
-                    lambda x: x if isinstance(x, (dict, list)) else json.loads(x) if isinstance(x, str) else None)
-
-        # Replace NaN with None
-        df = df.where(pd.notnull(df), None)
-        try:
-            metadata = MetaData()
-            trades_table = Table("EmporusTrades", metadata, autoload_with=self.engine)
-
-            with self.engine.begin() as conn:
-                stmt = insert(trades_table).values(
-                    df.to_dict(orient="records")).on_conflict_do_nothing()
-                conn.execute(stmt)
-
-            return
-        except Exception as e:
-            logger.error(f"Error saving trades: {str(e)}")
 
 
 class EmporusTradeManager:
@@ -143,7 +90,7 @@ class EmporusTradeManager:
             query_params.append(end_time)
 
         try:
-            trades_pgs = self.postgres_db.get_trades(request_query, query_params)
+            trades_pgs = self.postgres_db.get_trades_with_query(request_query, query_params)
             trades_sql = self.get_trades_from_sqlite(request_query, query_params)
         except Exception as e:
             logger.error(f"Error retrieving trades: {str(e)}")
